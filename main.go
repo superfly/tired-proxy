@@ -34,11 +34,24 @@ func main() {
 	var host = flag.String("host", "http://localhost", "host")
 	var port = flag.String("port", "8080", "port")
 	var timeInSeconds = flag.Int("time", 60, "time in seconds")
+	var upstreamTimeout = flag.Int("upstream-timeout", 0, "maximum time to wait before the upstream server is online")
 	flag.Parse()
+
+	fmt.Println("tired-proxy")
 
 	remote, err := url.Parse(*host)
 	if err != nil {
 		panic(err)
+	}
+
+	// Check if we need to wait for the upstream proxy to be online
+	if *upstreamTimeout > 0 {
+		fmt.Printf("Waiting %d seconds for upstream host to come online\n", *upstreamTimeout)
+		wfp := NewWaitForPortCmd(remote, PortInUse, *upstreamTimeout)
+		if err := wfp.Wait(); err != nil {
+			panic(fmt.Errorf("error while waiting for upstream host to come online: %w", err))
+		}
+		fmt.Println("Upstream host came online")
 	}
 
 	idle := NewIdleTracker(time.Duration(*timeInSeconds) * time.Second)
@@ -60,7 +73,7 @@ func main() {
 
 	go func() {
 		<-idle.Done()
-		fmt.Println("Shutting down server")
+		fmt.Println("Idle time passed, shutting down server")
 		os.Exit(0)
 	}()
 
