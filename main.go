@@ -30,7 +30,12 @@ func main() {
 	var port = flag.String("port", "8080", "port")
 	var timeInSeconds = flag.Int("time", 60, "time in seconds")
 	var upstreamTimeout = flag.Int("upstream-timeout", 0, "maximum time to wait before the upstream server is online")
+	var verbose = flag.Bool("verbose", false, "verbose output logging")
 	flag.Parse()
+
+	if *verbose {
+		log.Logger.SetLevel(logrus.DebugLevel)
+	}
 
 	remote, err := url.Parse(*host)
 	if err != nil {
@@ -47,7 +52,7 @@ func main() {
 		log.Info("Upstream host came online")
 	}
 
-	log.Debug("Starting server")
+	log.Debug("About to start proxy server...")
 
 	proxy := StartProxy(ctx, remote, *port, time.Duration(*timeInSeconds)*time.Second)
 
@@ -62,17 +67,13 @@ func main() {
 			log.Errorf("Proxy error: %s", err)
 		}
 		log.Info("proxy done")
-	case <-stop:
-		log.Info("signal stop")
+	case sig := <-stop:
+		log.Infof("Received signal '%s', shutdown application...", sig)
 		cancel()
-		t := time.Now()
-		log.Debug("Stop proxy...")
 		err := <-proxy.Done() // wait for the proxy to exit
 		if err != nil {
 			log.Errorf("Error: %s", err)
 		}
-		log.Debug("Stopped after: %s\n", time.Since(t))
-		log.Info("signal: proxy done")
 	}
 	log.Info("exit")
 }

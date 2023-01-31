@@ -49,7 +49,8 @@ func StartProxy(ctx context.Context, proxyTarget *url.URL, port string, idleTime
 
 	// start proxy
 	go func() {
-		log.Info("start proxy server")
+		log.Infof("start proxy server at %s", idleProxy.server.Addr)
+		// ignore ErrServerClosed as this one will be fired when the other goroutine shuts down the server
 		if err := idleProxy.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			idleProxy.chanFinish <- fmt.Errorf("error during handling proxy request: %w", err)
 		}
@@ -65,7 +66,7 @@ func StartProxy(ctx context.Context, proxyTarget *url.URL, port string, idleTime
 func (p *IdleProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.timer.Reset(p.idleTimeout)
 	//TODO: log.Println(r.URL)
-	log.Info(r.URL)
+	log.Debugf("%s %s", r.Method, r.URL)
 	p.proxy.ServeHTTP(w, r)
 }
 
