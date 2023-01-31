@@ -1,43 +1,36 @@
 package main
 
 import (
+	"context"
 	"flag"
-	"fmt"
-	"log"
-	"net"
-	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
+
+	"github.com/sirupsen/logrus"
+	prefixed "github.com/x-cray/logrus-prefixed-formatter"
 )
 
-type IdleTracker struct {
-	active map[net.Conn]bool
-	idle   time.Duration
-	timer  *time.Timer
-}
+var Version string
+var log *logrus.Entry
 
-func NewIdleTracker(idle time.Duration) *IdleTracker {
-	return &IdleTracker{
-		active: make(map[net.Conn]bool),
-		idle:   idle,
-		timer:  time.NewTimer(idle),
-	}
-}
-
-func (t *IdleTracker) Done() <-chan time.Time {
-	return t.timer.C
+func init() {
+	base := logrus.New()
+	base.Formatter = new(prefixed.TextFormatter)
+	log = base.WithFields(logrus.Fields{"prefix": "tired-proxy"})
 }
 
 func main() {
+	log.Info("Tired proxy - version ", Version)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	var host = flag.String("host", "http://localhost", "host")
 	var port = flag.String("port", "8080", "port")
 	var timeInSeconds = flag.Int("time", 60, "time in seconds")
 	var upstreamTimeout = flag.Int("upstream-timeout", 0, "maximum time to wait before the upstream server is online")
 	flag.Parse()
-
-	fmt.Println("tired-proxy")
 
 	remote, err := url.Parse(*host)
 	if err != nil {
@@ -46,37 +39,40 @@ func main() {
 
 	// Check if we need to wait for the upstream proxy to be online
 	if *upstreamTimeout > 0 {
-		fmt.Printf("Waiting %d seconds for upstream host to come online\n", *upstreamTimeout)
+		log.Info("Waiting %d seconds for upstream host to come online\n", *upstreamTimeout)
 		wfp := NewWaitForPortCmd(remote, PortInUse, *upstreamTimeout)
 		if err := wfp.Wait(); err != nil {
-			panic(fmt.Errorf("error while waiting for upstream host to come online: %w", err))
+			log.Panicf("error while waiting for upstream host to come online: %s", err)
 		}
-		fmt.Println("Upstream host came online")
+		log.Info("Upstream host came online")
 	}
 
-	idle := NewIdleTracker(time.Duration(*timeInSeconds) * time.Second)
+	log.Debug("Starting server")
 
-	handler := func(p *httputil.ReverseProxy) func(http.ResponseWriter, *http.Request) {
-		return func(w http.ResponseWriter, r *http.Request) {
-			idle.timer.Reset(idle.idle)
-			log.Println(r.URL)
-			p.ServeHTTP(w, r)
+	proxy := StartProxy(ctx, remote, *port, time.Duration(*timeInSeconds)*time.Second)
+
+	// Setting up signal capturing
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+
+	// wait for either: the proxy to stop or the application to exit
+	select {
+	case err := <-proxy.Done():
+		if err != nil {
+			log.Errorf("Proxy error: %s", err)
 		}
+		log.Info("proxy done")
+	case <-stop:
+		log.Info("signal stop")
+		cancel()
+		t := time.Now()
+		log.Debug("Stop proxy...")
+		err := <-proxy.Done() // wait for the proxy to exit
+		if err != nil {
+			log.Errorf("Error: %s", err)
+		}
+		log.Debug("Stopped after: %s\n", time.Since(t))
+		log.Info("signal: proxy done")
 	}
-
-	proxy := httputil.NewSingleHostReverseProxy(remote)
-	http.HandleFunc("/", handler(proxy))
-
-	fmt.Println("Starting server")
-
-	go func() {
-		<-idle.Done()
-		fmt.Println("Idle time passed, shutting down server")
-		os.Exit(0)
-	}()
-
-	err = http.ListenAndServe(fmt.Sprintf(":%s", *port), nil)
-	if err != nil {
-		panic(err)
-	}
+	log.Info("exit")
 }
