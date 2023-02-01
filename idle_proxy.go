@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-
 	"fmt"
 	"net/http"
 	"net/http/httputil"
@@ -19,9 +18,8 @@ type IdleProxy struct {
 	chanFinish  chan error
 }
 
-func StartProxy(ctx context.Context, proxyTarget *url.URL, port string, idleTimeout time.Duration) *IdleProxy {
-	//	ctx, cancel := context.WithCancel(ctx)
-
+func StartIdleProxy(ctx context.Context, proxyTarget *url.URL, port string, idleTimeout time.Duration) *IdleProxy {
+	log.Infof("Setup proxy server for target %s", proxyTarget)
 	idleProxy := &IdleProxy{
 		idleTimeout: idleTimeout,
 		timer:       time.NewTimer(idleTimeout),
@@ -49,31 +47,33 @@ func StartProxy(ctx context.Context, proxyTarget *url.URL, port string, idleTime
 
 	// start proxy
 	go func() {
-		log.Infof("start proxy server at %s", idleProxy.server.Addr)
+		log.Infof("Start proxy server, serving at http://localhost%s", idleProxy.server.Addr)
 		// ignore ErrServerClosed as this one will be fired when the other goroutine shuts down the server
 		if err := idleProxy.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			idleProxy.chanFinish <- fmt.Errorf("error during handling proxy request: %w", err)
 		}
 		// Proxy stopped
-		log.Info("proxy server shut down")
+		log.Info("Proxy server shut down")
 		close(idleProxy.chanFinish)
 	}()
 
 	return idleProxy
 }
 
-// Request handler for the idle proxy
+// Proxy request handler that also resets the idle timer
 func (p *IdleProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.timer.Reset(p.idleTimeout)
-	//TODO: log.Println(r.URL)
 	log.Debugf("%s %s", r.Method, r.URL)
 	p.proxy.ServeHTTP(w, r)
 }
 
+// Returns a channel that returns the current time when the timer expires
 func (p *IdleProxy) TimerDone() <-chan time.Time {
 	return p.timer.C
 }
 
+// Channel that is closed when the proxy server is shut down.
+// If any error occurred during start or shut down of the proxy server, it is sent through the channel.
 func (p *IdleProxy) Done() <-chan error {
 	return p.chanFinish
 }

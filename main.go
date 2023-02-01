@@ -39,7 +39,7 @@ func main() {
 
 	remote, err := url.Parse(*host)
 	if err != nil {
-		panic(err)
+		log.Panicf("Invalid url given as host parameter: %s", err)
 	}
 
 	// Check if we need to wait for the upstream proxy to be online
@@ -54,7 +54,7 @@ func main() {
 
 	log.Debug("About to start proxy server...")
 
-	proxy := StartProxy(ctx, remote, *port, time.Duration(*timeInSeconds)*time.Second)
+	proxy := StartIdleProxy(ctx, remote, *port, time.Duration(*timeInSeconds)*time.Second)
 
 	// Setting up signal capturing
 	stop := make(chan os.Signal, 1)
@@ -66,7 +66,7 @@ func main() {
 		if err != nil {
 			log.Errorf("Proxy error: %s", err)
 		}
-		log.Info("proxy done")
+		log.Debug("Proxy finished")
 	case sig := <-stop:
 		log.Infof("Received signal '%s', shutdown application...", sig)
 		cancel()
@@ -75,5 +75,5 @@ func main() {
 			log.Errorf("Error: %s", err)
 		}
 	}
-	log.Info("exit")
+	log.Info("Tired proxy - exit")
 }
