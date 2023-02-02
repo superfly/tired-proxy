@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
+	stdlog "log"
 	"net/url"
 	"os"
 	"os/signal"
@@ -20,32 +22,35 @@ func init() {
 	base := logrus.New()
 	base.Formatter = new(prefixed.TextFormatter)
 	log = base.WithFields(logrus.Fields{"prefix": "tired-proxy"})
+	// make all other packages also log with logrus
+
+	stdlog.SetOutput(log.Writer())
 }
 
 func main() {
-	log.Info("Tired proxy - version ", Version)
+	fmt.Printf("Tired proxy - version %s\n", Version)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var host = flag.String("host", "http://localhost", "host")
-	var port = flag.String("port", "8080", "port")
-	var timeInSeconds = flag.Int("time", 60, "time in seconds")
-	var upstreamTimeout = flag.Int("upstream-timeout", 0, "maximum time to wait before the upstream server is online")
-	var verbose = flag.Bool("verbose", false, "verbose output logging")
+	var origin = flag.String("origin", "http://localhost", "the origin host to which the requests are forwarded")
+	var port = flag.String("port", "8080", "port at which the proxy server listens for requests")
+	var idleTime = flag.Int("idle-time", 60, "idle time in seconds after which the application shuts down, if no requests where received")
+	var waitFortPortTime = flag.Int("wait-for-port", 0, "maximum time in seconds to wait before the origin servers port is in use before starting the proxy server")
+	var verbose = flag.Bool("verbose", false, "verbose logging output")
 	flag.Parse()
 
 	if *verbose {
 		log.Logger.SetLevel(logrus.DebugLevel)
 	}
 
-	remote, err := url.Parse(*host)
+	originUrl, err := url.Parse(*origin)
 	if err != nil {
 		log.Panicf("Invalid url given as host parameter: %s", err)
 	}
 
-	// Check if we need to wait for the upstream proxy to be online
-	if *upstreamTimeout > 0 {
-		log.Info("Waiting %d seconds for upstream host to come online\n", *upstreamTimeout)
-		wfp := NewWaitForPortCmd(remote, PortInUse, *upstreamTimeout)
+	// Check if we need to wait for the origin server to be online
+	if *waitFortPortTime > 0 {
+		log.Info("Waiting %d seconds for upstream host to come online\n", *waitFortPortTime)
+		wfp := NewWaitForPortCmd(originUrl, PortInUse, *waitFortPortTime)
 		if err := wfp.Wait(); err != nil {
 			log.Panicf("error while waiting for upstream host to come online: %s", err)
 		}
@@ -54,7 +59,7 @@ func main() {
 
 	log.Debug("About to start proxy server...")
 
-	proxy := StartIdleProxy(ctx, remote, *port, time.Duration(*timeInSeconds)*time.Second)
+	proxy := StartIdleProxy(ctx, originUrl, *port, time.Duration(*idleTime)*time.Second)
 
 	// Setting up signal capturing
 	stop := make(chan os.Signal, 1)

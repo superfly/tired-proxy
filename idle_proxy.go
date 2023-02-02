@@ -11,30 +11,30 @@ import (
 )
 
 type IdleProxy struct {
-	idleTimeout time.Duration
-	timer       *time.Timer
-	server      *http.Server
-	proxy       *httputil.ReverseProxy
-	chanFinish  chan error
+	idleTime   time.Duration
+	timer      *time.Timer
+	server     *http.Server
+	proxy      *httputil.ReverseProxy
+	chanFinish chan error
 }
 
-func StartIdleProxy(ctx context.Context, proxyTarget *url.URL, port string, idleTimeout time.Duration) *IdleProxy {
-	log.Infof("Setup proxy server for target %s", proxyTarget)
+func StartIdleProxy(ctx context.Context, originUrl *url.URL, port string, idleTime time.Duration) *IdleProxy {
+	log.Infof("Setup proxy server for origin %s", originUrl)
 	idleProxy := &IdleProxy{
-		idleTimeout: idleTimeout,
-		timer:       time.NewTimer(idleTimeout),
-		server:      &http.Server{Addr: fmt.Sprintf(":%s", port)},
-		proxy:       httputil.NewSingleHostReverseProxy(proxyTarget),
-		chanFinish:  make(chan error, 1),
+		idleTime:   idleTime,
+		timer:      time.NewTimer(idleTime),
+		server:     &http.Server{Addr: fmt.Sprintf(":%s", port)},
+		proxy:      httputil.NewSingleHostReverseProxy(originUrl),
+		chanFinish: make(chan error, 1),
 	}
 
 	idleProxy.server.Handler = idleProxy
 
-	// wait for the idleTimer to expire, or the context to cancel
 	go func() {
+		// wait for the idleTimer to expire, or the context to cancel
 		select {
 		case <-idleProxy.TimerDone():
-			log.Infof("Idle time (%s seconds) passed, shutting down proxy...", idleProxy.idleTimeout.String())
+			log.Infof("Idle time (%s seconds) expired, shutting down proxy...", idleProxy.idleTime.String())
 		case <-ctx.Done():
 			log.Info("Shutting down proxy...")
 		}
@@ -62,7 +62,7 @@ func StartIdleProxy(ctx context.Context, proxyTarget *url.URL, port string, idle
 
 // Proxy request handler that also resets the idle timer
 func (p *IdleProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	p.timer.Reset(p.idleTimeout)
+	p.timer.Reset(p.idleTime)
 	log.Debugf("%s %s", r.Method, r.URL)
 	p.proxy.ServeHTTP(w, r)
 }

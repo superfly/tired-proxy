@@ -3,6 +3,7 @@
         "Debugf",
         "Infof",
         "logrus",
-        "shellwords"
+        "shellwords",
+        "stdlog"
     ]
 }
