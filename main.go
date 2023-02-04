@@ -49,7 +49,7 @@ func main() {
 
 	// Check if we need to wait for the origin server to be online
 	if *waitFortPortTime > 0 {
-		log.Info("Waiting %d seconds for upstream host to come online\n", *waitFortPortTime)
+		log.Infof("Waiting %d seconds for upstream host to come online", *waitFortPortTime)
 		wfp := NewWaitForPortCmd(originUrl, PortInUse, *waitFortPortTime)
 		if err := wfp.Wait(); err != nil {
 			log.Panicf("error while waiting for upstream host to come online: %s", err)

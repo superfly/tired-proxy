@@ -69,7 +69,7 @@ func StartIdleProxy(ctx context.Context, originUrl *url.URL, port string, idleTi
 // Proxy request handler that also resets the idle timer
 func (p *IdleProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.timer.Reset(p.idleTime)
-	log.Infof("%s %s%s", r.Method, r.URL)
+	log.Infof("%s %s", r.Method, r.URL)
 	p.proxy.ServeHTTP(w, r)
 }
 
