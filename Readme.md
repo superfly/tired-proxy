@@ -1,7 +1,6 @@
 # Tired proxy
 
-![Docker image size](https://img.shields.io/docker/image-size/tiesv/tired-proxy?sort=date "Docker image size") 
-[Docker image: tiesv/tired-proxy](https://hub.docker.com/r/tiesv/tired-proxy)
+[![Docker image size](https://img.shields.io/docker/image-size/tiesv/tired-proxy?sort=date "Docker image size") ](https://hub.docker.com/r/tiesv/tired-proxy)
 
 _Altered version of superfly/tired-proxy_
 
