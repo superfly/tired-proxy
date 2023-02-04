@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	stdlog "log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 type IdleProxy struct {
@@ -20,15 +23,17 @@ type IdleProxy struct {
 
 func StartIdleProxy(ctx context.Context, originUrl *url.URL, port string, idleTime time.Duration) *IdleProxy {
 	log.Infof("Setup proxy server for origin %s", originUrl)
+	httpErrorLogWriter := log.WriterLevel(logrus.ErrorLevel)
 	idleProxy := &IdleProxy{
 		idleTime:   idleTime,
 		timer:      time.NewTimer(idleTime),
-		server:     &http.Server{Addr: fmt.Sprintf(":%s", port)},
+		server:     &http.Server{Addr: fmt.Sprintf(":%s", port), ErrorLog: stdlog.New(httpErrorLogWriter, "", 0)},
 		proxy:      httputil.NewSingleHostReverseProxy(originUrl),
 		chanFinish: make(chan error, 1),
 	}
 
 	idleProxy.server.Handler = idleProxy
+	idleProxy.proxy.ErrorLog = stdlog.New(httpErrorLogWriter, "", 0)
 
 	go func() {
 		// wait for the idleTimer to expire, or the context to cancel
@@ -47,6 +52,7 @@ func StartIdleProxy(ctx context.Context, originUrl *url.URL, port string, idleTi
 
 	// start proxy
 	go func() {
+		defer httpErrorLogWriter.Close()
 		log.Infof("Start proxy server, serving at http://localhost%s", idleProxy.server.Addr)
 		// ignore ErrServerClosed as this one will be fired when the other goroutine shuts down the server
 		if err := idleProxy.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -63,7 +69,7 @@ func StartIdleProxy(ctx context.Context, originUrl *url.URL, port string, idleTi
 // Proxy request handler that also resets the idle timer
 func (p *IdleProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.timer.Reset(p.idleTime)
-	log.Debugf("%s %s", r.Method, r.URL)
+	log.Infof("%s %s%s", r.Method, r.URL)
 	p.proxy.ServeHTTP(w, r)
 }
 
