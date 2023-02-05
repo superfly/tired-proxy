@@ -39,7 +39,7 @@ func StartIdleProxy(ctx context.Context, originUrl *url.URL, port string, idleTi
 		// wait for the idleTimer to expire, or the context to cancel
 		select {
 		case <-idleProxy.TimerDone():
-			log.Infof("Idle time (%s seconds) expired, shutting down proxy...", idleProxy.idleTime.String())
+			log.Infof("Idle time (%s) expired, shutting down proxy...", idleProxy.idleTime.String())
 		case <-ctx.Done():
 			log.Info("Shutting down proxy...")
 		}
