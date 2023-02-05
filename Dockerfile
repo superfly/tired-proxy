@@ -10,8 +10,9 @@ RUN go mod download
 
 COPY *.go ./
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tired-proxy
-RUN chmod +x /tired-proxy
+ARG VERSION
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=${VERSION}" -o /tired-proxy
+
 
 FROM scratch
 
