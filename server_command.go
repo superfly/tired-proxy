@@ -43,3 +43,7 @@ func StartServerCommand(ctx context.Context, command string) (*ServerCommand, er
 
 	return sv, nil
 }
+
+func (s *ServerCommand) Done() chan error {
+	return s.exitCh
+}

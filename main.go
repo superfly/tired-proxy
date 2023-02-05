@@ -2,62 +2,57 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
-	"log"
-	"net"
-	"net/http"
-	"net/http/httputil"
+	stdlog "log"
 	"net/url"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/sirupsen/logrus"
+	prefixed "github.com/x-cray/logrus-prefixed-formatter"
 )
 
-type IdleTracker struct {
-	active map[net.Conn]bool
-	idle   time.Duration
-	timer  *time.Timer
-}
+var Version string
+var log *logrus.Entry
 
-func NewIdleTracker(idle time.Duration) *IdleTracker {
-	return &IdleTracker{
-		active: make(map[net.Conn]bool),
-		idle:   idle,
-		timer:  time.NewTimer(idle),
-	}
-}
+func init() {
+	base := logrus.New()
+	base.Formatter = new(prefixed.TextFormatter)
+	log = base.WithFields(logrus.Fields{"prefix": "tired-proxy"})
+	// make all other packages also log with logrus
 
-func (t *IdleTracker) Done() <-chan time.Time {
-	return t.timer.C
+	stdlog.SetOutput(log.Writer())
 }
 
 func main() {
-	var serverCmd *ServerCommand
-	signalCh := make(chan os.Signal, 2)
-	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM)
+	fmt.Printf("Tired proxy - version %s\n", Version)
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	args, cmdArgs := splitArgs(os.Args[1:])
 	fs := flag.NewFlagSet("main options", flag.ContinueOnError)
-	var host = fs.String("host", "http://localhost", "host")
-	var port = fs.String("port", "8080", "port")
-	var timeInSeconds = fs.Int("time", 60, "time in seconds")
-	var upstreamTimeout = fs.Int("upstream-timeout", 0, "maximum time to wait before the upstream server is online")
+	var origin = fs.String("origin", "http://localhost", "the origin host to which the requests are forwarded")
+	var port = fs.String("port", "8080", "port at which the proxy server listens for requests")
+	var idleTime = fs.Int("idle-time", 60, "idle time in seconds after which the application shuts down, if no requests where received")
+	var waitFortPortTime = fs.Int("wait-for-port", 0, "maximum time in seconds to wait before the origin servers port is in use before starting the proxy server")
+	var verbose = fs.Bool("verbose", false, "verbose logging output")
 	fs.Parse(args)
 
-	fmt.Println("tired-proxy")
+	if *verbose {
+		log.Logger.SetLevel(logrus.DebugLevel)
+	}
 
-	remote, err := url.Parse(*host)
+	originUrl, err := url.Parse(*origin)
 	if err != nil {
-		panic(err)
+		log.Panicf("Invalid url given as host parameter: %s", err)
 	}
 
 	// start server if any
+	var serverCmd *ServerCommand
 	cmdStr := strings.Join(cmdArgs, " ")
 	if cmdStr != "" {
 		serverCmd, err = StartServerCommand(ctx, cmdStr)
@@ -66,80 +61,45 @@ func main() {
 		}
 	}
 
-	// Check if we need to wait for the upstream proxy to be online
-	if *upstreamTimeout > 0 {
-		fmt.Printf("Waiting %d seconds for upstream host to come online\n", *upstreamTimeout)
-		wfp := NewWaitForPortCmd(remote, PortInUse, *upstreamTimeout)
+	// Check if we need to wait for the origin server to be online
+	if *waitFortPortTime > 0 {
+		log.Infof("Waiting %d seconds for upstream host to come online", *waitFortPortTime)
+		wfp := NewWaitForPortCmd(originUrl, PortInUse, *waitFortPortTime)
 		if err := wfp.Wait(); err != nil {
-			panic(fmt.Errorf("error while waiting for upstream host to come online: %w", err))
+			log.Panicf("error while waiting for upstream host to come online: %s", err)
 		}
-		fmt.Println("Upstream host came online")
+		log.Info("Upstream host came online")
 	}
 
-	idle := NewIdleTracker(time.Duration(*timeInSeconds) * time.Second)
+	log.Debug("About to start proxy server...")
 
-	handler := func(p *httputil.ReverseProxy) func(http.ResponseWriter, *http.Request) {
-		return func(w http.ResponseWriter, r *http.Request) {
-			idle.timer.Reset(idle.idle)
-			log.Println(r.URL)
-			p.ServeHTTP(w, r)
+	proxy := StartIdleProxy(ctx, originUrl, *port, time.Duration(*idleTime)*time.Second)
+
+	// Setting up signal capturing
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+
+	// wait for either: the proxy to stop, serverCmd to exit, or the application to exit
+	select {
+	case err := <-proxy.Done():
+		if err != nil {
+			log.Errorf("Proxy error: %s", err)
+		}
+		log.Debug("Proxy finished")
+	case err := <-serverCmd.Done():
+		if err != nil {
+			log.Errorf("Server command exited with error: %s", err)
+		}
+		log.Debug("Server command finished")
+	case sig := <-stop:
+		log.Infof("Received signal '%s', shutdown application...", sig)
+		cancel()
+		err := <-proxy.Done() // wait for the proxy to exit
+		if err != nil {
+			log.Errorf("Error: %s", err)
 		}
 	}
-
-	proxy := httputil.NewSingleHostReverseProxy(remote)
-	http.HandleFunc("/", handler(proxy))
-
-	fmt.Println("Starting server")
-
-	go func() {
-		exitServerCmd := func(sig os.Signal) {
-			// stop command server, if any
-			if cmdStr != "" {
-				if err := serverCmd.cmd.Process.Signal(sig); err != nil && !strings.HasSuffix(err.Error(), "process already finished") {
-					fmt.Printf("Failed to shutdown server command: %s\n", err)
-					return
-				}
-				fmt.Println("waiting for exec process to close")
-				if err := <-serverCmd.exitCh; err != nil && !strings.HasPrefix(err.Error(), "signal:") {
-					fmt.Printf("error while waiting for server command to shut down: %s", err)
-					return
-				}
-			}
-		}
-		// wait for server CMD to end, or a signal ending the program
-		exitCode := 0
-		select {
-		case err := <-serverCmd.exitCh:
-			// cancel context
-			cancel()
-			// See if se can find the exit code
-			var exitErr *exec.ExitError
-			if errors.As(err, &exitErr) {
-				exitCode = exitErr.ProcessState.ExitCode()
-				fmt.Printf("server command exited with exit code %d\n", exitCode)
-			} else if err != nil {
-				exitCode = 1
-				fmt.Printf("server commanded exited with an error,: %s\n", err)
-			} else {
-				fmt.Printf("server command exited successfully\n")
-			}
-		case <-idle.Done():
-			fmt.Println("Idle time passed, shutting down server")
-			exitServerCmd(syscall.SIGTERM)
-			cancel()
-		case sig := <-signalCh:
-			fmt.Println("Signal received, shutting down server")
-			exitServerCmd(sig)
-			cancel()
-		}
-		fmt.Println("Shutdown tired-proxy")
-		os.Exit(exitCode)
-	}()
-
-	err = http.ListenAndServe(fmt.Sprintf(":%s", *port), nil)
-	if err != nil {
-		panic(err)
-	}
+	log.Info("Tired proxy - exit")
 }
 
 // splitArgs returns the list of args before and after a "--" arg. If the double

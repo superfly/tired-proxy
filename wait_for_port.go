@@ -37,6 +37,7 @@ type WaitForPortCmd struct {
 func NewWaitForPortCmd(remote *url.URL, portStatus PortStatus, timeout int) *WaitForPortCmd {
 	host, port, err := net.SplitHostPort(remote.Host)
 	if err != nil {
+		log.Debugln("No port found in origin host url, guess a port depending on protocol...")
 		// no port in the host, guess for a port
 		switch remote.Scheme {
 		case "http":
@@ -47,6 +48,7 @@ func NewWaitForPortCmd(remote *url.URL, portStatus PortStatus, timeout int) *Wai
 			panic(fmt.Sprintf("unable to determine port for url %#v, please specify one explicitly", remote.String()))
 		}
 		host = remote.Host
+		log.Debugf("Use %d as port for origin")
 	}
 	portNr, err := strconv.Atoi(port)
 	if err != nil {
@@ -133,25 +135,32 @@ func canConnectToPort(ctx context.Context, host string, port int) bool {
 
 // portIsInUse allows checking if a port is in use in the specified host.
 func portIsInUse(ctx context.Context, host string, port int) bool {
+	log.Debugf("Check if port %d on %s is in use...", port, host)
 	// If we can connect, is in use
 	if canConnectToPort(ctx, host, port) {
+		log.Debugln("Can connect to to port via tcp. Return port in use")
 		return true
 	}
 
 	// If we are trying to check a remote host, we cannot do more, so we consider it not in use
 	if host != "" {
+		log.Debugln("Unable to check if a port is in use in any other way for remote hosts. Return port not in use")
 		return false
 	}
 
 	// If we are checking locally, try to listen
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	log.Debugln("Attempt to listen to port locally...")
 	if err == nil {
 		listener.Close()
+		log.Debugln("Able to listen. Return port not in use")
 		return false
 	} else if isAddrInUseError(err) {
+		log.Debugln("Unable to listen with AddrInUseError. Return port is use")
 		return true
 	}
 	// We could not connect to the port, and we cannot listen on it, the safest thing
 	// we can assume in localhost is that is not in use (binding to a privileged port, for example)
+	log.Debugln("Unable to connect or listen on port, assume not in use. Return port not in use")
 	return false
 }
